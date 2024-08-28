@@ -45,6 +45,25 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>2.22.2</version>
+                <configuration>
+                    <argLine>
+                        -XX:+UseG1GC
+                        -XX:MaxGCPauseMillis=200
+                        -XX:+ParallelRefProcEnabled
+                        -XX:+UnlockExperimentalVMOptions
+                        -XX:G1NewSizePercent=30
+                        -XX:G1MaxNewSizePercent=40
+                        -XX:G1HeapRegionSize=16M
+                        -XX:InitiatingHeapOccupancyPercent=15
+                        -XX:G1MixedGCLiveThresholdPercent=85
+                        -XX:+AlwaysPreTouch
+                    </argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.8.1</version>
                 <configuration>
