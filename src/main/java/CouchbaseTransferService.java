@@ -39,6 +39,12 @@ public class CouchbaseTransferService {
 		this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 	}
 
+	private int countTotalDocuments() {
+		String countQuery = String.format("SELECT COUNT(*) AS total FROM `%s`.`%s`.`%s`", sourceBucketName, sourceScopeName, sourceCollectionName);
+		QueryResult result = asyncCluster.query(countQuery).join();
+		return result.rowsAsObject().get(0).getInt("total");
+	}
+
 	public void transferCollection() {
 		AsyncBucket sourceBucket = asyncCluster.bucket(sourceBucketName);
 		AsyncBucket targetBucket = asyncCluster.bucket(targetBucketName);
@@ -46,6 +52,9 @@ public class CouchbaseTransferService {
 		AsyncScope targetScope = targetBucket.scope(targetScopeName);
 		AsyncCollection sourceCollection = sourceScope.collection(sourceCollectionName);
 		AsyncCollection targetCollection = targetScope.collection(targetCollectionName);
+
+		int totalDocuments = countTotalDocuments();
+		logger.info("Total documents to transfer: {}", totalDocuments);
 
 		String query = String.format("SELECT META().id FROM `%s`.`%s`.`%s` LIMIT %d OFFSET $offset", sourceBucketName, sourceScopeName, sourceCollectionName, batchSize);
 		AtomicInteger offset = new AtomicInteger();
@@ -73,13 +82,15 @@ public class CouchbaseTransferService {
 					String id = row.getString("id");
 					return sourceCollection.get(id).thenCompose(doc -> targetCollection.upsert(id, doc.contentAsObject())).thenAccept(success -> {
 						int count = documentCounter.incrementAndGet();
-						if (count % 10000 == 0) {
-							logger.info("Transferred {} documents so far", count);
-						}
-						if (count % 100000 == 0) {
-							long endTime = System.currentTimeMillis();
-							logger.info("Time taken to transfer 100,000 documents: {} ms", (endTime - startTime.get()));
-							startTime.set(endTime);
+						synchronized (logger) {
+							if (count % 10000 == 0) {
+								logger.info("Transferred {} documents so far", count);
+							}
+							if (count % 100000 == 0) {
+								long endTime = System.currentTimeMillis();
+								logger.info("Time taken to transfer 100,000 documents: {} ms", (endTime - startTime.get()));
+								startTime.set(endTime);
+							}
 						}
 						successfulResults.add(id);
 					}).exceptionally(error -> {
