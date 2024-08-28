@@ -45,7 +45,16 @@ public class CouchbaseTransferService {
 		return result.rowsAsObject().get(0).getInt("total");
 	}
 
-	public void transferBatch(int startOffset) {
+	public void checkDatabaseHealth() {
+		// Example health check query
+		String healthCheckQuery = "SELECT * FROM system:active_requests";
+		QueryResult result = asyncCluster.query(healthCheckQuery).join();
+		logger.info("Database health check: {}", result.rowsAsObject());
+	}
+
+	public void transferCollection() {
+		checkDatabaseHealth(); // Initial health check
+
 		AsyncBucket sourceBucket = asyncCluster.bucket(sourceBucketName);
 		AsyncBucket targetBucket = asyncCluster.bucket(targetBucketName);
 		AsyncScope sourceScope = sourceBucket.scope(sourceScopeName);
@@ -54,13 +63,13 @@ public class CouchbaseTransferService {
 		AsyncCollection targetCollection = targetScope.collection(targetCollectionName);
 
 		String query = String.format("SELECT META().id FROM `%s`.`%s`.`%s` LIMIT %d OFFSET $offset", sourceBucketName, sourceScopeName, sourceCollectionName, batchSize);
-		AtomicInteger offset = new AtomicInteger(startOffset);
+		AtomicInteger offset = new AtomicInteger();
 		AtomicInteger documentCounter = new AtomicInteger();
 		AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
 
 		List<CompletableFuture<Void>> allFutures = new ArrayList<>();
 
-		while (documentCounter.get() < batchSize) {
+		while (true) {
 			CompletableFuture<QueryResult> queryFuture = asyncCluster.query(query, QueryOptions.queryOptions().parameters(JsonObject.create().put("offset", offset.get())).scanConsistency(QueryScanConsistency.REQUEST_PLUS));
 			QueryResult result = queryFuture.join();
 
@@ -82,6 +91,7 @@ public class CouchbaseTransferService {
 						synchronized (logger) {
 							if (count % 10000 == 0) {
 								logger.info("Transferred {} documents so far", count);
+								checkDatabaseHealth(); // Health check during transfer
 							}
 							if (count % 100000 == 0) {
 								long endTime = System.currentTimeMillis();
@@ -106,7 +116,7 @@ public class CouchbaseTransferService {
 
 		CompletableFuture<Void> allTransfersFuture = CompletableFuture.allOf(allFutures.toArray(new CompletableFuture[0]));
 		allTransfersFuture.join();
-		logger.info("Batch transfer completed. Total documents transferred in this batch: {}", documentCounter.get());
+		logger.info("Document transfer completed. Total documents transferred: {}", documentCounter.get());
 
 		// Ensure all threads are terminated
 		asyncCluster.disconnect().join();

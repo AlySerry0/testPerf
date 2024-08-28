@@ -8,13 +8,7 @@ public class Runner {
 		CouchbaseConfig config = new CouchbaseConfig("couchbase://localhost", "Administrator", "password");
 		Cluster cluster = config.connect();
 
-		int batchSize = 100000;
-		int totalDocuments = new CouchbaseTransferService(cluster, "Bucket_1", "Bucket_2", "_default", "_default", "_default", "_default", batchSize).countTotalDocuments();
-		int iterations = (int) Math.ceil((double) totalDocuments / batchSize);
-
-		for (int i = 0; i < iterations; i++) {
-			CouchbaseTransferService transferService = new CouchbaseTransferService(cluster, "Bucket_1", "Bucket_2", "_default", "_default", "_default", "_default", batchSize);
-			transferService.transferBatch(i * batchSize);
-		}
+		CouchbaseTransferService transferService = new CouchbaseTransferService(cluster, "Bucket_1", "Bucket_2", "_default", "_default", "_default", "_default", 100000);
+		transferService.transferCollection();
 	}
 }
