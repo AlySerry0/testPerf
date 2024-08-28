@@ -39,13 +39,13 @@ public class CouchbaseTransferService {
 		this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 	}
 
-	private int countTotalDocuments() {
+	public int countTotalDocuments() {
 		String countQuery = String.format("SELECT COUNT(*) AS total FROM `%s`.`%s`.`%s`", sourceBucketName, sourceScopeName, sourceCollectionName);
 		QueryResult result = asyncCluster.query(countQuery).join();
 		return result.rowsAsObject().get(0).getInt("total");
 	}
 
-	public void transferCollection() {
+	public void transferBatch(int startOffset) {
 		AsyncBucket sourceBucket = asyncCluster.bucket(sourceBucketName);
 		AsyncBucket targetBucket = asyncCluster.bucket(targetBucketName);
 		AsyncScope sourceScope = sourceBucket.scope(sourceScopeName);
@@ -53,17 +53,14 @@ public class CouchbaseTransferService {
 		AsyncCollection sourceCollection = sourceScope.collection(sourceCollectionName);
 		AsyncCollection targetCollection = targetScope.collection(targetCollectionName);
 
-		int totalDocuments = countTotalDocuments();
-		logger.info("Total documents to transfer: {}", totalDocuments);
-
 		String query = String.format("SELECT META().id FROM `%s`.`%s`.`%s` LIMIT %d OFFSET $offset", sourceBucketName, sourceScopeName, sourceCollectionName, batchSize);
-		AtomicInteger offset = new AtomicInteger();
+		AtomicInteger offset = new AtomicInteger(startOffset);
 		AtomicInteger documentCounter = new AtomicInteger();
 		AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
 
 		List<CompletableFuture<Void>> allFutures = new ArrayList<>();
 
-		while (true) {
+		while (documentCounter.get() < batchSize) {
 			CompletableFuture<QueryResult> queryFuture = asyncCluster.query(query, QueryOptions.queryOptions().parameters(JsonObject.create().put("offset", offset.get())).scanConsistency(QueryScanConsistency.REQUEST_PLUS));
 			QueryResult result = queryFuture.join();
 
@@ -109,7 +106,7 @@ public class CouchbaseTransferService {
 
 		CompletableFuture<Void> allTransfersFuture = CompletableFuture.allOf(allFutures.toArray(new CompletableFuture[0]));
 		allTransfersFuture.join();
-		logger.info("Document transfer completed. Total documents transferred: {}", documentCounter.get());
+		logger.info("Batch transfer completed. Total documents transferred in this batch: {}", documentCounter.get());
 
 		// Ensure all threads are terminated
 		asyncCluster.disconnect().join();
