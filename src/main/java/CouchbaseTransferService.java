@@ -10,8 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -26,6 +25,7 @@ public class CouchbaseTransferService {
 	private final String targetScopeName;
 	private final String targetCollectionName;
 	private final int batchSize;
+	private final ExecutorService executorService;
 
 	public CouchbaseTransferService(Cluster cluster, String sourceBucketName, String targetBucketName, String sourceScopeName, String sourceCollectionName, String targetScopeName, String targetCollectionName, int batchSize) {
 		this.asyncCluster = cluster.async();
@@ -36,6 +36,7 @@ public class CouchbaseTransferService {
 		this.targetScopeName = targetScopeName;
 		this.targetCollectionName = targetCollectionName;
 		this.batchSize = batchSize;
+		this.executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 	}
 
 	public void transferCollection() {
@@ -49,10 +50,9 @@ public class CouchbaseTransferService {
 		String query = String.format("SELECT META().id FROM `%s`.`%s`.`%s` LIMIT %d OFFSET $offset", sourceBucketName, sourceScopeName, sourceCollectionName, batchSize);
 		AtomicInteger offset = new AtomicInteger();
 		AtomicInteger documentCounter = new AtomicInteger();
-		AtomicInteger batchCounter = new AtomicInteger();
 		AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
 
-		CompletableFuture<Void> future = CompletableFuture.completedFuture(null);
+		List<CompletableFuture<Void>> allFutures = new ArrayList<>();
 
 		while (true) {
 			CompletableFuture<QueryResult> queryFuture = asyncCluster.query(query, QueryOptions.queryOptions().parameters(JsonObject.create().put("offset", offset.get())).scanConsistency(QueryScanConsistency.REQUEST_PLUS));
@@ -67,7 +67,6 @@ public class CouchbaseTransferService {
 			List<String> successfulResults = Collections.synchronizedList(new ArrayList<>());
 			Map<String, Throwable> erroredResults = new ConcurrentHashMap<>();
 
-			int batchSize = 50; // Define the size of each write batch
 			for (int i = 0; i < rows.size(); i += batchSize) {
 				List<JsonObject> batch = rows.subList(i, Math.min(i + batchSize, rows.size()));
 				CompletableFuture<Void> batchFuture = CompletableFuture.allOf(batch.stream().map(row -> {
@@ -92,12 +91,17 @@ public class CouchbaseTransferService {
 			}
 
 			CompletableFuture<Void> allBatchesFuture = CompletableFuture.allOf(transferFutures.toArray(new CompletableFuture[0]));
-			future = future.thenCompose(v -> allBatchesFuture);
+			allFutures.add(allBatchesFuture);
 
 			offset.addAndGet(batchSize);
 		}
 
-		future.join();
+		CompletableFuture<Void> allTransfersFuture = CompletableFuture.allOf(allFutures.toArray(new CompletableFuture[0]));
+		allTransfersFuture.join();
 		logger.info("Document transfer completed. Total documents transferred: {}", documentCounter.get());
+
+		// Ensure all threads are terminated
+		asyncCluster.disconnect().join();
+		executorService.shutdown();
 	}
 }
